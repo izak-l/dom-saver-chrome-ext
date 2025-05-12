@@ -1,0 +1,221 @@
+// manifest.json
+// This file is the entry point and configuration for your Chrome extension.
+{
+  "manifest_version": 3,
+  "name": "DOM Saver",
+  "version": "1.0",
+  "description": "Saves the DOM of the current page.",
+  "permissions": [
+    "activeTab", // Allows interaction with the currently active tab
+    "scripting", // Allows injecting scripts into pages
+    "downloads"  // Allows initiating file downloads
+  ],
+  "action": {
+    "default_popup": "popup.html", // Specifies the HTML file for the popup
+    "default_icon": {
+      // You'll need to create these icons (e.g., 16x16, 48x48, 128x128 pixels)
+      // For now, you can omit this or use placeholders if you don't have icons.
+      // "16": "icons/icon16.png",
+      // "48": "icons/icon48.png",
+      // "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js" // Specifies the background service worker script
+  },
+  "icons": {
+    // Optional: Define icons for the extension page and other places
+    // "16": "icons/icon16.png",
+    // "48": "icons/icon48.png",
+    // "128": "icons/icon128.png"
+  }
+}
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Saver</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            width: 200px; /* Set a fixed width for the popup */
+            padding: 10px;
+            text-align: center;
+            background-color: #f4f4f4;
+        }
+        h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        button {
+            background-color: #4CAF50; /* Green */
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        p#status {
+            font-size: 12px;
+            color: #555;
+            min-height: 1em; /* Reserve space for status messages */
+        }
+    </style>
+</head>
+<body>
+    <h3>Save Page DOM</h3>
+    <button id="saveButton">Save DOM</button>
+    <p id="status"></p>
+    <script src="popup.js"></script> </body>
+</html>
+```javascript
+// popup.js
+// This script handles the logic for popup.html.
+
+// Get the button and status paragraph elements from popup.html
+const saveButton = document.getElementById('saveButton');
+const statusP = document.getElementById('status');
+
+// Add an event listener to the button for when it's clicked
+saveButton.addEventListener('click', () => {
+    // Disable the button to prevent multiple clicks and show a status message
+    saveButton.disabled = true;
+    statusP.textContent = 'Processing...';
+
+    // Send a message to the background script to start the DOM saving process
+    chrome.runtime.sendMessage({ action: "saveDOM" }, (response) => {
+        // This callback function is executed when the background script sends a response
+        if (chrome.runtime.lastError) {
+            // If an error occurred (e.g., background script couldn't connect)
+            console.error("Error sending message:", chrome.runtime.lastError.message);
+            statusP.textContent = 'Error: ' + chrome.runtime.lastError.message;
+            saveButton.disabled = false; // Re-enable the button
+            return;
+        }
+
+        if (response && response.status === "success") {
+            statusP.textContent = 'DOM download initiated!';
+            // Optionally close the popup after a short delay
+            setTimeout(() => window.close(), 2000);
+        } else if (response && response.status === "error") {
+            statusP.textContent = 'Error: ' + (response.message || 'Unknown error');
+            saveButton.disabled = false; // Re-enable the button
+        } else {
+            statusP.textContent = 'No response or unknown error.';
+            saveButton.disabled = false; // Re-enable the button
+        }
+    });
+});
+```javascript
+// background.js
+// This script runs in the background and handles the core logic.
+
+// Listen for messages from other parts of the extension (e.g., popup.js)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "saveDOM") {
+        // Query for the currently active tab in the current window
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (chrome.runtime.lastError || !tabs || tabs.length === 0) {
+                console.error("Error querying tabs:", chrome.runtime.lastError?.message);
+                sendResponse({ status: "error", message: "Could not get active tab." });
+                return true; // Keep the message channel open for asynchronous response
+            }
+
+            const activeTab = tabs[0];
+
+            // Check if the URL is a restricted one (e.g., chrome:// pages)
+            if (activeTab.url && (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('edge://'))) {
+                console.warn("Cannot access DOM of restricted URL:", activeTab.url);
+                sendResponse({ status: "error", message: "Cannot save DOM from this page (e.g., chrome:// URLs)." });
+                return true;
+            }
+
+            // Inject a script into the active tab to get its DOM content
+            chrome.scripting.executeScript({
+                target: { tabId: activeTab.id },
+                function: getPageDOM // The function to execute in the tab's context
+            }, (injectionResults) => {
+                if (chrome.runtime.lastError || !injectionResults || injectionResults.length === 0) {
+                    console.error("Error injecting script:", chrome.runtime.lastError?.message);
+                    sendResponse({ status: "error", message: "Failed to get DOM content. " + (chrome.runtime.lastError?.message || "") });
+                    return true;
+                }
+
+                // The result from the injected script is an array, we take the first element's result
+                const domContent = injectionResults[0].result;
+
+                if (domContent) {
+                    // Create a Blob with the DOM content
+                    const blob = new Blob([domContent], { type: 'text/html' });
+                    // Create a URL for the Blob
+                    const url = URL.createObjectURL(blob);
+
+                    // Suggest a filename (e.g., domain-timestamp.html)
+                    let filename = "page_dom.html";
+                    try {
+                        const tabUrl = new URL(activeTab.url);
+                        const hostname = tabUrl.hostname.replace(/^www\./, ''); // Remove www.
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                        filename = `${hostname}_${timestamp}.html`;
+                    } catch (e) {
+                        // If URL parsing fails, use a generic name
+                        console.warn("Could not parse URL for filename:", activeTab.url, e);
+                    }
+
+
+                    // Use the chrome.downloads API to trigger a download
+                    chrome.downloads.download({
+                        url: url,
+                        filename: filename,
+                        saveAs: true // Prompts the user to choose the save location
+                    }, (downloadId) => {
+                        if (chrome.runtime.lastError) {
+                            console.error("Download failed:", chrome.runtime.lastError.message);
+                            sendResponse({ status: "error", message: "Download failed: " + chrome.runtime.lastError.message });
+                        } else if (downloadId) {
+                            console.log("Download initiated with ID:", downloadId);
+                            sendResponse({ status: "success" });
+                        } else {
+                             console.error("Download did not start, no ID received.");
+                             sendResponse({ status: "error", message: "Download did not start." });
+                        }
+                        // Revoke the blob URL after some time to free up resources
+                        // It's good practice, though the browser might handle it if the download starts quickly.
+                        setTimeout(() => URL.revokeObjectURL(url), 10000);
+                    });
+
+                } else {
+                    sendResponse({ status: "error", message: "No DOM content received." });
+                }
+            });
+        });
+        return true; // Indicates that sendResponse will be called asynchronously
+    }
+});
+
+// This function will be injected into the web page to retrieve its full HTML (DOM)
+function getPageDOM() {
+    // Check if it's an XML document (e.g. RSS feed)
+    if (document.contentType === 'text/xml' || document.contentType === 'application/xml' || document.documentElement.tagName === 'rss' || document.documentElement.tagName === 'feed') {
+        const serializer = new XMLSerializer();
+        return serializer.serializeToString(document);
+    }
+    // For HTML documents
+    return document.documentElement.outerHTML;
+}
+
