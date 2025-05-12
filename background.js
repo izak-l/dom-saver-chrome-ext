@@ -1,6 +1,14 @@
 // background.js
 // This script runs in the background and handles the core logic.
 
+// Import JSZip library
+try {
+  self.importScripts('jszip.js');
+  console.log("JSZip loaded successfully in background");
+} catch (error) {
+  console.error("Failed to load JSZip:", error);
+}
+
 // Listen for messages from other parts of the extension (e.g., popup.js)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log("Background received message:", request.action, request);
@@ -85,34 +93,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // Direct download mode (original behavior)
             // Create a Blob with the DOM content
             const blob = new Blob([domContent], { type: 'text/html' });
-            // Create a URL for the Blob
-            const url = URL.createObjectURL(blob);
-            console.log("Blob URL created");
+            console.log("Blob created for HTML content");
 
-            // Use the chrome.downloads API to trigger a download
-            console.log("Initiating download...");
-            chrome.downloads.download({
-              url: url,
-              filename: filename,
-              saveAs: true // Prompts the user to choose the save location
-            }, (downloadId) => {
-              if (chrome.runtime.lastError) {
-                console.error("Download failed:", chrome.runtime.lastError.message);
-                safeResponse({ status: "error", message: "Download failed: " + chrome.runtime.lastError.message });
-              } else if (downloadId) {
-                console.log("Download initiated with ID:", downloadId);
-                // Immediate response to help ensure popup gets it
-                safeResponse({ status: "success" });
-              } else {
-                console.error("Download did not start, no ID received.");
-                safeResponse({ status: "error", message: "Download did not start." });
-              }
-              // Revoke the blob URL after some time to free up resources
-              setTimeout(() => {
-                console.log("Revoking blob URL");
-                URL.revokeObjectURL(url);
-              }, 10000);
-            });
+            // Convert Blob to data URI with FileReader
+            console.log("Converting blob to data URI");
+            const reader = new FileReader();
+            reader.onload = function() {
+              const dataUrl = reader.result;
+              console.log("Data URI created, initiating download");
+              
+              // Use the chrome.downloads API to trigger a download
+              chrome.downloads.download({
+                url: dataUrl,
+                filename: filename,
+                saveAs: true // Prompts the user to choose the save location
+              }, (downloadId) => {
+                if (chrome.runtime.lastError) {
+                  console.error("Download failed:", chrome.runtime.lastError.message);
+                  safeResponse({ status: "error", message: "Download failed: " + chrome.runtime.lastError.message });
+                } else if (downloadId) {
+                  console.log("Download initiated with ID:", downloadId);
+                  // Immediate response to help ensure popup gets it
+                  safeResponse({ status: "success" });
+                } else {
+                  console.error("Download did not start, no ID received.");
+                  safeResponse({ status: "error", message: "Download did not start." });
+                }
+              });
+            };
+            
+            reader.onerror = function() {
+              console.error("FileReader error:", reader.error);
+              safeResponse({ status: "error", message: "Failed to read HTML content: " + reader.error });
+            };
+            
+            reader.readAsDataURL(blob);
           }
         } else {
           console.error("No DOM content received from page");
@@ -240,24 +255,37 @@ async function exportCapturesAsZIP() {
   const zipFilename = `dom_captures_${timestamp}.zip`;
   console.log("ZIP filename:", zipFilename);
   
-  // Download the ZIP file
-  const url = URL.createObjectURL(zipBlob);
-  console.log("Created blob URL for ZIP");
-  console.log("Initiating ZIP download");
-  const downloadId = await chrome.downloads.download({
-    url: url,
-    filename: zipFilename,
-    saveAs: true
+  // Convert Blob to base64 data URI
+  return new Promise((resolve, reject) => {
+    console.log("Converting blob to data URI");
+    const reader = new FileReader();
+    reader.onload = function() {
+      const dataUrl = reader.result;
+      console.log("Data URI created, length:", dataUrl.length);
+      
+      console.log("Initiating ZIP download with data URI");
+      chrome.downloads.download({
+        url: dataUrl,
+        filename: zipFilename,
+        saveAs: true
+      }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+          console.error("Download failed:", chrome.runtime.lastError);
+          reject(new Error("Download failed: " + chrome.runtime.lastError.message));
+        } else {
+          console.log("ZIP download initiated, ID:", downloadId);
+          resolve(downloadId);
+        }
+      });
+    };
+    
+    reader.onerror = function() {
+      console.error("FileReader error:", reader.error);
+      reject(new Error("Failed to read ZIP blob: " + reader.error));
+    };
+    
+    reader.readAsDataURL(zipBlob);
   });
-  console.log("ZIP download initiated, ID:", downloadId);
-  
-  // Revoke the URL after a delay
-  setTimeout(() => {
-    console.log("Revoking ZIP blob URL");
-    URL.revokeObjectURL(url);
-  }, 10000);
-  
-  return downloadId;
 }
 
 // This function will be injected into the web page to retrieve its full HTML (DOM)
