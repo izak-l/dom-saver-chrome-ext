@@ -35,7 +35,7 @@ exportZIPButton.addEventListener('click', () => {
   statusP.textContent = 'Creating ZIP file...';
 
   console.log("Sending exportZIP message to background");
-  chrome.runtime.sendMessage({ action: "exportZIP" }, (response) => {
+  chrome.runtime.sendMessage({ action: "exportZIP" }, async (response) => {
     console.log("Received exportZIP response:", response);
     // Check if the message port is still open
     if (chrome.runtime.lastError) {
@@ -45,17 +45,57 @@ exportZIPButton.addEventListener('click', () => {
       return;
     }
 
-    if (response && response.status === "success") {
-      console.log("ZIP export successful");
-      statusP.textContent = 'ZIP download initiated!';
-      setButtonsEnabled(true); // Re-enable buttons before closing
+    if (response && response.status === "success" && response.captures) {
+      console.log("Got captures for ZIP creation");
+      statusP.textContent = 'Creating ZIP file...';
       
-      // Wait a bit longer to make sure download starts first
-      console.log("Will close popup in 3 seconds");
-      setTimeout(() => {
-        console.log("Closing popup");
-        window.close();
-      }, 3000);
+      try {
+        // Create ZIP file in browser context where URL.createObjectURL is available
+        console.log(`Creating ZIP with ${response.captures.length} files`);
+        const zip = new JSZip();
+        
+        // Add each capture to the ZIP
+        response.captures.forEach(capture => {
+          console.log("Adding file to ZIP:", capture.filename);
+          zip.file(capture.filename, capture.content);
+        });
+        
+        // Generate the ZIP file
+        console.log("Generating ZIP blob");
+        statusP.textContent = 'Generating ZIP...';
+        const zipBlob = await zip.generateAsync({ type: 'blob' });
+        console.log("ZIP blob generated, size:", zipBlob.size);
+        
+        // Create a timestamp for the ZIP filename
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const zipFilename = `dom_captures_${timestamp}.zip`;
+        
+        console.log("Creating download link");
+        // Create a link element and trigger download
+        const downloadUrl = URL.createObjectURL(zipBlob);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = downloadUrl;
+        downloadLink.download = zipFilename;
+        
+        // Append to document, click, and remove
+        document.body.appendChild(downloadLink);
+        console.log("Triggering download click");
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        
+        // Clean up the URL
+        setTimeout(() => {
+          URL.revokeObjectURL(downloadUrl);
+        }, 5000);
+        
+        statusP.textContent = 'ZIP download initiated!';
+        console.log("ZIP download complete");
+        setButtonsEnabled(true);
+      } catch (error) {
+        console.error("Error creating ZIP:", error);
+        statusP.textContent = `Error creating ZIP: ${error.message}`;
+        setButtonsEnabled(true);
+      }
     } else if (response && response.status === "error") {
       console.error("ZIP export error:", response.message);
       statusP.textContent = 'Error: ' + (response.message || 'Unknown error');
@@ -182,40 +222,28 @@ function saveDOMHandler(saveMode) {
         const blob = new Blob([domContent], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
 
-        console.log("Initiating download");
-        chrome.downloads.download({
-          url: url,
-          filename: filename,
-          saveAs: true
-        }, (downloadId) => {
-          clearTimeout(timeoutId);
-          
-          if (chrome.runtime.lastError) {
-            console.error("Download failed:", chrome.runtime.lastError.message);
-            statusP.textContent = 'Error: Download failed.';
-            setButtonsEnabled(true);
-          } else if (downloadId) {
-            console.log("Download initiated with ID:", downloadId);
-            statusP.textContent = 'DOM download initiated!';
-            setButtonsEnabled(true);
-            
-            console.log("Will close popup in 3 seconds");
-            setTimeout(() => {
-              console.log("Closing popup");
-              window.close();
-            }, 3000);
-          } else {
-            console.error("Download did not start, no ID received");
-            statusP.textContent = 'Error: Download did not start.';
-            setButtonsEnabled(true);
-          }
-          
-          // Clean up the blob URL
-          setTimeout(() => {
-            console.log("Revoking blob URL");
-            URL.revokeObjectURL(url);
-          }, 10000);
-        });
+        console.log("Creating download link");
+        // Create a link element and trigger download
+        const downloadLink = document.createElement('a');
+        downloadLink.href = url;
+        downloadLink.download = filename;
+        
+        // Append to document, click, and remove
+        document.body.appendChild(downloadLink);
+        console.log("Triggering download click");
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        
+        // Report success and clean up
+        clearTimeout(timeoutId);
+        statusP.textContent = 'DOM download initiated!';
+        setButtonsEnabled(true);
+        
+        // Clean up the URL
+        setTimeout(() => {
+          console.log("Revoking blob URL");
+          URL.revokeObjectURL(url);
+        }, 5000);
       });
     });
     

@@ -142,10 +142,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Handle exporting all saved captures as a ZIP
   else if (request.action === "exportZIP") {
     console.log("Processing exportZIP action");
-    exportCapturesAsZIP()
-      .then((downloadId) => {
-        console.log("ZIP export complete, download ID:", downloadId);
-        safeResponse({ status: "success", message: "Captures exported as ZIP" });
+    getSavedCaptures()
+      .then(captures => {
+        if (captures.length === 0) {
+          safeResponse({ 
+            status: "error", 
+            message: "No captures available to export" 
+          });
+          return;
+        }
+        
+        console.log(`Sending ${captures.length} captures back to popup for ZIP creation`);
+        // Just send the captures data back to the popup where JSZip is loaded in browser context
+        safeResponse({ 
+          status: "success", 
+          captures: captures
+        });
       })
       .catch(error => {
         console.error("Error exporting ZIP:", error);
