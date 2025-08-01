@@ -8,11 +8,14 @@ const exportZIPButton = document.getElementById('exportZIPButton');
 const clearCapturesButton = document.getElementById('clearCapturesButton');
 const statusP = document.getElementById('status');
 const captureCountP = document.getElementById('captureCount');
+const scrapersSection = document.getElementById('scrapersSection');
+const scrapersContainer = document.getElementById('scrapersContainer');
 
 // Initialize the UI
 document.addEventListener('DOMContentLoaded', () => {
   console.log("Popup initialized");
   updateCaptureCount();
+  loadAvailableScrapers();
 });
 
 // Save DOM as immediate download
@@ -31,7 +34,7 @@ saveToStorageButton.addEventListener('click', () => {
 exportZIPButton.addEventListener('click', () => {
   console.log("Export ZIP button clicked");
   // Disable buttons during export
-  setButtonsEnabled(false);
+  setAllButtonsEnabled(false);
   statusP.textContent = 'Creating ZIP file...';
 
   console.log("Sending exportZIP message to background");
@@ -41,7 +44,7 @@ exportZIPButton.addEventListener('click', () => {
     if (chrome.runtime.lastError) {
       console.error("Error exporting ZIP:", chrome.runtime.lastError.message);
       statusP.textContent = 'Error: ' + chrome.runtime.lastError.message;
-      setButtonsEnabled(true);
+      setAllButtonsEnabled(true);
       return;
     }
 
@@ -90,20 +93,20 @@ exportZIPButton.addEventListener('click', () => {
         
         statusP.textContent = 'ZIP download initiated!';
         console.log("ZIP download complete");
-        setButtonsEnabled(true);
+        setAllButtonsEnabled(true);
       } catch (error) {
         console.error("Error creating ZIP:", error);
         statusP.textContent = `Error creating ZIP: ${error.message}`;
-        setButtonsEnabled(true);
+        setAllButtonsEnabled(true);
       }
     } else if (response && response.status === "error") {
       console.error("ZIP export error:", response.message);
       statusP.textContent = 'Error: ' + (response.message || 'Unknown error');
-      setButtonsEnabled(true);
+      setAllButtonsEnabled(true);
     } else {
       console.error("No response or unknown error for ZIP export");
       statusP.textContent = 'No response or unknown error.';
-      setButtonsEnabled(true);
+      setAllButtonsEnabled(true);
     }
   });
 });
@@ -143,7 +146,7 @@ function saveDOMHandler(saveMode) {
   console.log(`SaveDOM handler called with mode: ${saveMode}`);
   
   // Disable all buttons to prevent multiple clicks
-  setButtonsEnabled(false);
+  setAllButtonsEnabled(false);
   statusP.textContent = 'Processing...';
 
   // Set a timeout to re-enable buttons if no response is received
@@ -151,7 +154,7 @@ function saveDOMHandler(saveMode) {
   const timeoutId = setTimeout(() => {
     console.warn("Response timeout - re-enabling buttons");
     statusP.textContent = 'No response received. Please try again.';
-    setButtonsEnabled(true);
+    setAllButtonsEnabled(true);
   }, 10000); // 10 second timeout
 
   // Try more direct approach for direct save
@@ -165,7 +168,7 @@ function saveDOMHandler(saveMode) {
         console.error("Error querying tabs:", chrome.runtime.lastError?.message);
         clearTimeout(timeoutId);
         statusP.textContent = 'Error: Could not get active tab.';
-        setButtonsEnabled(true);
+        setAllButtonsEnabled(true);
         return;
       }
 
@@ -190,7 +193,7 @@ function saveDOMHandler(saveMode) {
           console.error("Error injecting script:", chrome.runtime.lastError?.message);
           clearTimeout(timeoutId);
           statusP.textContent = 'Error: Failed to get DOM content.';
-          setButtonsEnabled(true);
+          setAllButtonsEnabled(true);
           return;
         }
 
@@ -201,7 +204,7 @@ function saveDOMHandler(saveMode) {
           console.error("No DOM content received");
           clearTimeout(timeoutId);
           statusP.textContent = 'Error: No DOM content received.';
-          setButtonsEnabled(true);
+          setAllButtonsEnabled(true);
           return;
         }
 
@@ -237,7 +240,7 @@ function saveDOMHandler(saveMode) {
         // Report success and clean up
         clearTimeout(timeoutId);
         statusP.textContent = 'DOM download initiated!';
-        setButtonsEnabled(true);
+        setAllButtonsEnabled(true);
         
         // Clean up the URL
         setTimeout(() => {
@@ -260,7 +263,7 @@ function saveDOMHandler(saveMode) {
     if (chrome.runtime.lastError) {
       console.error("Error sending message:", chrome.runtime.lastError.message);
       statusP.textContent = 'Error: ' + chrome.runtime.lastError.message;
-      setButtonsEnabled(true); // Re-enable the buttons
+      setAllButtonsEnabled(true); // Re-enable the buttons
       return;
     }
 
@@ -269,10 +272,10 @@ function saveDOMHandler(saveMode) {
       if (saveMode === 'batch') {
         statusP.textContent = 'DOM saved to batch!';
         updateCaptureCount();
-        setButtonsEnabled(true); // Re-enable the buttons
+        setAllButtonsEnabled(true); // Re-enable the buttons
       } else {
         statusP.textContent = 'DOM download initiated!';
-        setButtonsEnabled(true); // Re-enable buttons before closing
+        setAllButtonsEnabled(true); // Re-enable buttons before closing
         
         // Wait a bit longer to make sure download starts first
         console.log("Will close popup in 3 seconds");
@@ -284,11 +287,11 @@ function saveDOMHandler(saveMode) {
     } else if (response && response.status === "error") {
       console.error("saveDOM error:", response.message);
       statusP.textContent = 'Error: ' + (response.message || 'Unknown error');
-      setButtonsEnabled(true); // Re-enable the buttons
+      setAllButtonsEnabled(true); // Re-enable the buttons
     } else {
       console.error("No response or unknown error for saveDOM");
       statusP.textContent = 'No response or unknown error.';
-      setButtonsEnabled(true); // Re-enable the buttons
+      setAllButtonsEnabled(true); // Re-enable the buttons
     }
   });
 }
@@ -325,5 +328,129 @@ function updateCaptureCount() {
       console.error("Error or no response for getCaptures");
       captureCountP.textContent = 'Error getting count';
     }
+  });
+}
+
+// Load available scrapers for current page
+function loadAvailableScrapers() {
+  console.log("Loading available scrapers");
+  chrome.runtime.sendMessage({ action: "getAvailableScrapers" }, (response) => {
+    console.log("Received getAvailableScrapers response:", response);
+    if (chrome.runtime.lastError) {
+      console.error("Error getting available scrapers:", chrome.runtime.lastError.message);
+      return;
+    }
+
+    if (response && response.status === "success" && response.scrapers) {
+      displayScrapers(response.scrapers);
+    } else {
+      console.log("No scrapers available for current page");
+      scrapersSection.style.display = 'none';
+    }
+  });
+}
+
+// Display available scrapers in the UI
+function displayScrapers(scrapers) {
+  console.log("Displaying scrapers:", scrapers);
+  
+  if (scrapers.length === 0) {
+    scrapersSection.style.display = 'none';
+    return;
+  }
+
+  // Clear existing scrapers
+  scrapersContainer.innerHTML = '';
+  
+  scrapers.forEach(scraper => {
+    // Create scraper button container
+    const scraperDiv = document.createElement('div');
+    scraperDiv.style.marginBottom = '8px';
+    
+    // Create direct run button
+    const runButton = document.createElement('button');
+    runButton.textContent = `Run ${scraper.name}`;
+    runButton.className = 'scraper-button';
+    runButton.addEventListener('click', () => {
+      runScraper(scraper.id, 'direct');
+    });
+    
+    // Create batch save button
+    const batchButton = document.createElement('button');
+    batchButton.textContent = `Save to Batch`;
+    batchButton.className = 'scraper-button secondary';
+    batchButton.style.fontSize = '10px';
+    batchButton.style.padding = '6px 12px';
+    batchButton.addEventListener('click', () => {
+      runScraper(scraper.id, 'batch');
+    });
+    
+    // Create description
+    const description = document.createElement('div');
+    description.textContent = scraper.description;
+    description.className = 'scraper-description';
+    
+    scraperDiv.appendChild(runButton);
+    scraperDiv.appendChild(batchButton);
+    scraperDiv.appendChild(description);
+    scrapersContainer.appendChild(scraperDiv);
+  });
+  
+  scrapersSection.style.display = 'block';
+}
+
+// Execute a scraper
+function runScraper(scraperId, saveMode) {
+  console.log(`Running scraper ${scraperId} in ${saveMode} mode`);
+  
+  // Disable all buttons during execution
+  setAllButtonsEnabled(false);
+  statusP.textContent = 'Running scraper...';
+  
+  chrome.runtime.sendMessage({ 
+    action: "executeScraper", 
+    scraperId: scraperId,
+    saveMode: saveMode
+  }, (response) => {
+    console.log("Received executeScraper response:", response);
+    
+    if (chrome.runtime.lastError) {
+      console.error("Error executing scraper:", chrome.runtime.lastError.message);
+      statusP.textContent = 'Error: ' + chrome.runtime.lastError.message;
+      setAllButtonsEnabled(true);
+      return;
+    }
+
+    if (response && response.status === "success") {
+      console.log("Scraper executed successfully");
+      
+      if (saveMode === 'batch') {
+        statusP.textContent = `Scraper results saved to batch! Found ${response.result?.count || 0} items.`;
+        updateCaptureCount();
+      } else {
+        statusP.textContent = `Scraper results downloaded! Found ${response.result?.count || 0} items.`;
+      }
+      
+      setAllButtonsEnabled(true);
+    } else if (response && response.status === "error") {
+      console.error("Scraper execution error:", response.message);
+      statusP.textContent = 'Error: ' + (response.message || 'Unknown error');
+      setAllButtonsEnabled(true);
+    } else {
+      console.error("No response or unknown error for scraper execution");
+      statusP.textContent = 'No response or unknown error.';
+      setAllButtonsEnabled(true);
+    }
+  });
+}
+
+// Enable or disable all buttons including scraper buttons
+function setAllButtonsEnabled(enabled) {
+  setButtonsEnabled(enabled);
+  
+  // Also disable scraper buttons
+  const scraperButtons = document.querySelectorAll('.scraper-button');
+  scraperButtons.forEach(button => {
+    button.disabled = !enabled;
   });
 }

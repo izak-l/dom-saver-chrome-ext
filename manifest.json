@@ -8,6 +8,7 @@
     "scripting",
     "downloads",
     "storage",
+    "unlimitedStorage",
     "tabs"
   ],
   "host_permissions": [

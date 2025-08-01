@@ -79,6 +79,21 @@
             background-color: #ddd;
             margin: 10px 0;
         }
+        .scraper-button {
+            background-color: #9C27B0; /* Purple */
+            font-size: 12px;
+            padding: 8px 16px;
+            margin: 2px;
+        }
+        .scraper-button:hover {
+            background-color: #7B1FA2;
+        }
+        .scraper-description {
+            font-size: 10px;
+            color: #666;
+            margin-top: 2px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -88,6 +103,14 @@
         <button id="saveToStorageButton" class="secondary">Add to Batch</button>
     </div>
     <p id="captureCount" class="capture-count">Saved captures: 0</p>
+    
+    <!-- Scrapers Section -->
+    <div id="scrapersSection" style="display: none;">
+        <hr>
+        <h4 style="margin: 8px 0; color: #333; font-size: 14px;">Available Scrapers</h4>
+        <div id="scrapersContainer"></div>
+    </div>
+    
     <hr>
     <div>
         <button id="exportZIPButton" class="secondary">Export ZIP</button>

@@ -9,6 +9,23 @@ try {
   console.error("Failed to load JSZip:", error);
 }
 
+// Import scrapers registry
+try {
+  self.importScripts('scrapers.js');
+  console.log("Scrapers loaded successfully in background");
+} catch (error) {
+  console.error("Failed to load scrapers:", error);
+}
+
+// Clean up any temporary storage on startup
+chrome.runtime.onStartup.addListener(() => {
+  cleanupTemporaryStorage();
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  cleanupTemporaryStorage();
+});
+
 // Listen for messages from other parts of the extension (e.g., popup.js)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log("Background received message:", request.action, request);
@@ -199,6 +216,222 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true; // Indicates that sendResponse will be called asynchronously
   }
+  
+  // Handle getting available scrapers for current page
+  else if (request.action === "getAvailableScrapers") {
+    console.log("Processing getAvailableScrapers action");
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError || !tabs || tabs.length === 0) {
+        console.error("Error querying tabs:", chrome.runtime.lastError?.message);
+        safeResponse({ status: "error", message: "Could not get active tab." });
+        return;
+      }
+
+      const activeTab = tabs[0];
+      const availableScrapers = scraperRegistry.findMatchingScrapers(activeTab.url);
+      
+      console.log(`Found ${availableScrapers.length} available scrapers for ${activeTab.url}`);
+      safeResponse({ 
+        status: "success", 
+        scrapers: availableScrapers.map(s => ({
+          id: s.id,
+          name: s.name,
+          description: s.description
+        }))
+      });
+    });
+    return true;
+  }
+  
+  // Handle executing a specific scraper
+  else if (request.action === "executeScraper") {
+    console.log("Processing executeScraper action:", request.scraperId);
+    const scraper = scraperRegistry.getScraper(request.scraperId);
+    
+    if (!scraper) {
+      safeResponse({ status: "error", message: "Scraper not found" });
+      return;
+    }
+    
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError || !tabs || tabs.length === 0) {
+        console.error("Error querying tabs:", chrome.runtime.lastError?.message);
+        safeResponse({ status: "error", message: "Could not get active tab." });
+        return;
+      }
+
+      const activeTab = tabs[0];
+      console.log("Capturing DOM for scraper execution:", activeTab.url);
+      
+      // Step 1: Capture DOM and run scraper in content script context
+      chrome.scripting.executeScript({
+        target: { tabId: activeTab.id },
+        function: function(scraperId, pageUrl, pageTitle) {
+          // This runs in the page context where DOM is available
+          try {
+            // Create a minimal scraper registry in page context
+            const linkedinCompanyScraper = {
+              id: 'linkedin-company-people',
+              extract: function(doc, pageUrl, pageTitle) {
+                console.log('LinkedIn Company People scraper executing...');
+                
+                // Find all anchor tags with aria-label containing "View" and "profile"
+                const profileData = [];
+                const anchors = doc.querySelectorAll('a[aria-label*="View"][aria-label*="profile"]');
+                
+                anchors.forEach(anchor => {
+                  if (anchor.href) {
+                    // Truncate URL to remove query parameters
+                    const baseUrl = anchor.href.split('?')[0];
+                    if (baseUrl.includes('linkedin.com/in/')) {
+                      // Find the blurb text - it's in a sibling container
+                      let blurb = "";
+                      
+                      // The blurb is in the artdeco-entity-lockup__subtitle which is a sibling of the title containing the anchor
+                      const lockupContent = anchor.closest('.artdeco-entity-lockup__content');
+                      if (lockupContent) {
+                        const blurbElement = lockupContent.querySelector('.artdeco-entity-lockup__subtitle div.ember-view.lt-line-clamp.lt-line-clamp--multi-line[style="-webkit-line-clamp: 2"]');
+                        if (blurbElement) {
+                          blurb = blurbElement.textContent.trim();
+                        }
+                      }
+                      
+                      profileData.push({
+                        url: baseUrl,
+                        blurb: blurb || ""
+                      });
+                    }
+                  }
+                });
+
+                // Also look for profile links in different structures
+                const profileAnchors = doc.querySelectorAll('a[href*="/in/"]');
+                profileAnchors.forEach(anchor => {
+                  if (anchor.href && anchor.href.includes('linkedin.com/in/')) {
+                    const baseUrl = anchor.href.split('?')[0];
+                    
+                    // Check if we already have this profile
+                    const existingProfile = profileData.find(p => p.url === baseUrl);
+                    if (!existingProfile) {
+                      // Find blurb for this profile link too
+                      let blurb = "";
+                      
+                      const lockupContent = anchor.closest('.artdeco-entity-lockup__content');
+                      if (lockupContent) {
+                        const blurbElement = lockupContent.querySelector('.artdeco-entity-lockup__subtitle div.ember-view.lt-line-clamp.lt-line-clamp--multi-line[style="-webkit-line-clamp: 2"]');
+                        if (blurbElement) {
+                          blurb = blurbElement.textContent.trim();
+                        }
+                      }
+                      
+                      profileData.push({
+                        url: baseUrl,
+                        blurb: blurb || ""
+                      });
+                    }
+                  }
+                });
+
+                // Remove duplicates based on URL and sort
+                const uniqueProfiles = profileData.filter((profile, index, self) => 
+                  index === self.findIndex(p => p.url === profile.url)
+                ).sort((a, b) => a.url.localeCompare(b.url));
+                
+                console.log(`Found ${uniqueProfiles.length} LinkedIn profiles with blurbs`);
+                
+                return {
+                  type: 'linkedin-profiles',
+                  data: uniqueProfiles,
+                  count: uniqueProfiles.length,
+                  extractedAt: new Date().toISOString(),
+                  pageUrl: pageUrl,
+                  pageTitle: pageTitle
+                };
+              }
+            };
+            
+            // Execute scraper on live document
+            if (scraperId === 'linkedin-company-people') {
+              const result = linkedinCompanyScraper.extract(document, pageUrl, pageTitle);
+              return { success: true, result: result };
+            } else {
+              return { error: 'Unknown scraper: ' + scraperId };
+            }
+            
+          } catch (error) {
+            console.error('Scraper execution error:', error);
+            return { error: error.message };
+          }
+        },
+        args: [request.scraperId, activeTab.url, activeTab.title]
+      }, (injectionResults) => {
+        if (chrome.runtime.lastError || !injectionResults || injectionResults.length === 0) {
+          console.error("Error executing scraper:", chrome.runtime.lastError?.message);
+          safeResponse({ status: "error", message: "Failed to execute scraper." });
+          return;
+        }
+
+        const scriptResult = injectionResults[0].result;
+        if (!scriptResult) {
+          safeResponse({ status: "error", message: "No result from scraper execution." });
+          return;
+        }
+
+        if (scriptResult.error) {
+          safeResponse({ status: "error", message: scriptResult.error });
+          return;
+        }
+
+        if (scriptResult.success) {
+          const result = scriptResult.result;
+          console.log("Scraper execution result:", result);
+          
+          // Handle results
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const filename = `${scraper.id}_${timestamp}.json`;
+          const content = JSON.stringify(result, null, 2);
+          
+          if (request.saveMode === "batch") {
+            storeDOMCapture(filename, content, activeTab.url, activeTab.title)
+              .then(() => {
+                safeResponse({ 
+                  status: "success", 
+                  message: "Scraper results saved to batch",
+                  result: result
+                });
+              })
+              .catch(error => {
+                safeResponse({ status: "error", message: "Failed to save results: " + error.message });
+              });
+          } else {
+            // Direct download
+            const blob = new Blob([content], { type: 'application/json' });
+            const reader = new FileReader();
+            reader.onload = function() {
+              const dataUrl = reader.result;
+              chrome.downloads.download({
+                url: dataUrl,
+                filename: filename,
+                saveAs: true
+              }, (downloadId) => {
+                if (chrome.runtime.lastError) {
+                  safeResponse({ status: "error", message: "Download failed: " + chrome.runtime.lastError.message });
+                } else {
+                  safeResponse({ 
+                    status: "success", 
+                    message: "Scraper results downloaded",
+                    result: result
+                  });
+                }
+              });
+            };
+            reader.readAsDataURL(blob);
+          }
+        }
+      });
+    });
+    return true;
+  }
 });
 
 // Store a DOM capture in chrome.storage.local
@@ -312,4 +545,30 @@ function getPageDOM() {
   // For HTML documents
   console.log("HTML document detected, using outerHTML");
   return document.documentElement.outerHTML;
+}
+
+// Clean up temporary DOM storage
+async function cleanupTemporaryStorage() {
+  console.log("Cleaning up temporary storage");
+  try {
+    const data = await chrome.storage.local.get();
+    const keysToRemove = [];
+    const cutoffTime = Date.now() - (5 * 60 * 1000); // 5 minutes ago
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('temp_dom_')) {
+        // Remove if older than 5 minutes or malformed
+        if (!value.timestamp || value.timestamp < cutoffTime) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    
+    if (keysToRemove.length > 0) {
+      console.log(`Removing ${keysToRemove.length} temporary DOM entries`);
+      await chrome.storage.local.remove(keysToRemove);
+    }
+  } catch (error) {
+    console.error("Error cleaning up temporary storage:", error);
+  }
 }
