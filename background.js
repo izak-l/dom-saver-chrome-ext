@@ -263,108 +263,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const activeTab = tabs[0];
       console.log("Capturing DOM for scraper execution:", activeTab.url);
       
-      // Step 1: Capture DOM and run scraper in content script context
+      // Step 1: Inject scrapers.js and execute scraper in content script context
       chrome.scripting.executeScript({
         target: { tabId: activeTab.id },
-        function: function(scraperId, pageUrl, pageTitle) {
-          // This runs in the page context where DOM is available
-          try {
-            // Create a minimal scraper registry in page context
-            const linkedinCompanyScraper = {
-              id: 'linkedin-company-people',
-              extract: function(doc, pageUrl, pageTitle) {
-                console.log('LinkedIn Company People scraper executing...');
-                
-                // Find all anchor tags with aria-label containing "View" and "profile"
-                const profileData = [];
-                const anchors = doc.querySelectorAll('a[aria-label*="View"][aria-label*="profile"]');
-                
-                anchors.forEach(anchor => {
-                  if (anchor.href) {
-                    // Truncate URL to remove query parameters
-                    const baseUrl = anchor.href.split('?')[0];
-                    if (baseUrl.includes('linkedin.com/in/')) {
-                      // Find the blurb text - it's in a sibling container
-                      let blurb = "";
-                      
-                      // The blurb is in the artdeco-entity-lockup__subtitle which is a sibling of the title containing the anchor
-                      const lockupContent = anchor.closest('.artdeco-entity-lockup__content');
-                      if (lockupContent) {
-                        const blurbElement = lockupContent.querySelector('.artdeco-entity-lockup__subtitle div.ember-view.lt-line-clamp.lt-line-clamp--multi-line[style="-webkit-line-clamp: 2"]');
-                        if (blurbElement) {
-                          blurb = blurbElement.textContent.trim();
-                        }
-                      }
-                      
-                      profileData.push({
-                        url: baseUrl,
-                        blurb: blurb || ""
-                      });
-                    }
-                  }
-                });
+        files: ['scrapers.js']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("Error injecting scrapers.js:", chrome.runtime.lastError.message);
+          safeResponse({ status: "error", message: "Failed to load scrapers." });
+          return;
+        }
 
-                // Also look for profile links in different structures
-                const profileAnchors = doc.querySelectorAll('a[href*="/in/"]');
-                profileAnchors.forEach(anchor => {
-                  if (anchor.href && anchor.href.includes('linkedin.com/in/')) {
-                    const baseUrl = anchor.href.split('?')[0];
-                    
-                    // Check if we already have this profile
-                    const existingProfile = profileData.find(p => p.url === baseUrl);
-                    if (!existingProfile) {
-                      // Find blurb for this profile link too
-                      let blurb = "";
-                      
-                      const lockupContent = anchor.closest('.artdeco-entity-lockup__content');
-                      if (lockupContent) {
-                        const blurbElement = lockupContent.querySelector('.artdeco-entity-lockup__subtitle div.ember-view.lt-line-clamp.lt-line-clamp--multi-line[style="-webkit-line-clamp: 2"]');
-                        if (blurbElement) {
-                          blurb = blurbElement.textContent.trim();
-                        }
-                      }
-                      
-                      profileData.push({
-                        url: baseUrl,
-                        blurb: blurb || ""
-                      });
-                    }
-                  }
-                });
-
-                // Remove duplicates based on URL and sort
-                const uniqueProfiles = profileData.filter((profile, index, self) => 
-                  index === self.findIndex(p => p.url === profile.url)
-                ).sort((a, b) => a.url.localeCompare(b.url));
-                
-                console.log(`Found ${uniqueProfiles.length} LinkedIn profiles with blurbs`);
-                
-                return {
-                  type: 'linkedin-profiles',
-                  data: uniqueProfiles,
-                  count: uniqueProfiles.length,
-                  extractedAt: new Date().toISOString(),
-                  pageUrl: pageUrl,
-                  pageTitle: pageTitle
-                };
+        // Now execute the scraper using the injected registry
+        chrome.scripting.executeScript({
+          target: { tabId: activeTab.id },
+          function: function(scraperId, pageUrl, pageTitle) {
+            // This runs in the page context where DOM is available and scrapers.js is loaded
+            try {
+              console.log('Executing scraper:', scraperId);
+              
+              // Use the injected scraper registry
+              if (typeof scraperRegistry === 'undefined') {
+                return { error: 'Scraper registry not available' };
               }
-            };
-            
-            // Execute scraper on live document
-            if (scraperId === 'linkedin-company-people') {
-              const result = linkedinCompanyScraper.extract(document, pageUrl, pageTitle);
+              
+              const scraper = scraperRegistry.getScraper(scraperId);
+              if (!scraper) {
+                return { error: 'Scraper not found: ' + scraperId };
+              }
+              
+              // Execute scraper on live document
+              const result = scraper.extract(document, pageUrl, pageTitle);
               return { success: true, result: result };
-            } else {
-              return { error: 'Unknown scraper: ' + scraperId };
+              
+            } catch (error) {
+              console.error('Scraper execution error:', error);
+              return { error: error.message };
             }
-            
-          } catch (error) {
-            console.error('Scraper execution error:', error);
-            return { error: error.message };
-          }
-        },
-        args: [request.scraperId, activeTab.url, activeTab.title]
-      }, (injectionResults) => {
+          },
+          args: [request.scraperId, activeTab.url, activeTab.title]
+        }, (injectionResults) => {
         if (chrome.runtime.lastError || !injectionResults || injectionResults.length === 0) {
           console.error("Error executing scraper:", chrome.runtime.lastError?.message);
           safeResponse({ status: "error", message: "Failed to execute scraper." });
@@ -428,6 +366,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             reader.readAsDataURL(blob);
           }
         }
+        });
       });
     });
     return true;

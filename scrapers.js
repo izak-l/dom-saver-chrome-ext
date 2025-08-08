@@ -52,24 +52,31 @@ const scraperRegistry = new ScraperRegistry();
 const linkedinCompanyScraper = {
   id: 'linkedin-company-people',
   name: 'LinkedIn Company People',
-  description: 'Extract LinkedIn profile URLs from company people pages',
+  description: 'Extract LinkedIn profile URLs from company and school people pages',
   urlPatterns: [
     /linkedin\.com\/company\/[^\/]+\/people/,
-    'linkedin.com/company'
+    /linkedin\.com\/school\/[^\/]+\/people/,
   ],
   
   extract: function(doc, pageUrl, pageTitle) {
     console.log('LinkedIn Company People scraper executing...');
     
-    // Find all anchor tags with aria-label containing "View" and "profile"
+    // Find all anchor tags with aria-label containing "View" and "profile" within org profile cards
     const profileData = [];
-    const anchors = doc.querySelectorAll('a[aria-label*="View"][aria-label*="profile"]');
+    const anchors = doc.querySelectorAll('.artdeco-card.org-people-profile-card__card-spacing.org-people__card-margin-bottom a[aria-label*="View"][aria-label*="profile"]');
     
     anchors.forEach(anchor => {
       if (anchor.href) {
         // Truncate URL to remove query parameters
         const baseUrl = anchor.href.split('?')[0];
         if (baseUrl.includes('linkedin.com/in/')) {
+          // Extract the name from the single-line element
+          let name = "";
+          const nameElement = anchor.querySelector('.ember-view.lt-line-clamp.lt-line-clamp--single-line');
+          if (nameElement) {
+            name = nameElement.textContent.trim();
+          }
+          
           // Find the blurb text - it's in a sibling container
           let blurb = "";
           
@@ -83,6 +90,7 @@ const linkedinCompanyScraper = {
           }
           
           profileData.push({
+            name: name || "",
             url: baseUrl,
             blurb: blurb || ""
           });
@@ -90,8 +98,8 @@ const linkedinCompanyScraper = {
       }
     });
 
-    // Also look for profile links in different structures
-    const profileAnchors = doc.querySelectorAll('a[href*="/in/"]');
+    // Also look for profile links in different structures within org profile cards
+    const profileAnchors = doc.querySelectorAll('.artdeco-card.org-people-profile-card__card-spacing.org-people__card-margin-bottom a[href*="/in/"]');
     profileAnchors.forEach(anchor => {
       if (anchor.href && anchor.href.includes('linkedin.com/in/')) {
         const baseUrl = anchor.href.split('?')[0];
@@ -99,6 +107,13 @@ const linkedinCompanyScraper = {
         // Check if we already have this profile
         const existingProfile = profileData.find(p => p.url === baseUrl);
         if (!existingProfile) {
+          // Extract the name from the single-line element
+          let name = "";
+          const nameElement = anchor.querySelector('.ember-view.lt-line-clamp.lt-line-clamp--single-line');
+          if (nameElement) {
+            name = nameElement.textContent.trim();
+          }
+          
           // Find blurb for this profile link too
           let blurb = "";
           
@@ -111,6 +126,7 @@ const linkedinCompanyScraper = {
           }
           
           profileData.push({
+            name: name || "",
             url: baseUrl,
             blurb: blurb || ""
           });
